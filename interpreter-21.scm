@@ -484,3 +484,25 @@
       ((eq? a (car l)) #t)
       (else (member? a (cdr l))))))
 
+;testing tools---------------------
+(define test
+  (lambda (number)
+    (interpret (string-append "t3" (number->string number) ".txt"))))
+
+(define testbatch
+   (lambda (list key)
+     (cond
+       ((null? list) 'done)
+       (else (checkanswer (car list) (car key)) (testbatch (cdr list) (cdr key))))))
+   
+(define checkanswer
+  (lambda (number key)
+    (if (eq? (test number) key)
+        (string-append "test" (number->string number) "=>good //")
+        (string-append "test" (number->string number) "=>INCORRECT: expected" (number->string key) ", given:"(number->string (test number))))))
+
+(define autotest
+  (testbatch fullset fullsetanswers))
+
+(define fullset        '(01 02 03 04 05 06 08 09 10 11 13 14 15 16))
+(define fullsetanswers '(10 14 45 55 1 115 20 24 2  35 90 69 87 64))
