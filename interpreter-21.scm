@@ -2,12 +2,20 @@
 ;Zhenglin Huang
 ;optimized version, Part 2
 
-(load "functionParser.scm")
+;(load "functionParser.scm")
 
 ;takes a file and run the call tree generated from it
 (define interpret
   (lambda (file)
     (run (parser file) newenvironment stdreturn stdreturn stdreturn)))
+
+;--------------------
+(define call-main
+  (lambda (state)
+ (M_return '(return (funcall main)) state)))
+
+
+;--------------------
 
 ;returns a state that is modified by the call tree
 ;Input: queue is the list of statement, state is the state to operate on, 
@@ -46,7 +54,7 @@
       ;if the first word is "=", it is an assignment
       ((eq? '= (operator statement)) (Mstate_assignment-cps statement state return))
       ;if it starts with "return", we retrive the boolean or numerical value of the next item, the expression
-      ((eq? 'return (operator statement)) (return (M_return statement state)))
+      ((eq? 'return (operator statement)) (break (M_return statement state)))
       ;if it is an if statement
       ((eq? 'if (operator statement)) (Mstate_if-cps statement state return break continue))
       ;if it is a while loop
@@ -55,6 +63,8 @@
       ((eq? 'begin (operator statement)) (M_block_begin statement state return break continue))
       ((eq? 'continue (operator statement)) (continue state))
       ((eq? 'break (operator statement))  (break state))
+      ;Added function call without return
+      ((eq? 'funcall (operator statement)) (begin (Mfuncall (cdr statement)) (return state)))
       (else (error 'statement_not_recognized)))))
 
 ;takes a block-begin-end statement and run it with "run" function
@@ -170,12 +180,67 @@
       ((eq? expression 'true) (Mboolean #t state))
       ((eq? expression 'false) (Mboolean #f state))
       ((atom? expression) (Mexpression (lookup expression state) state))
+      ((and (pair? expression) (eq? (car expression) 'function)) (lookup expression state))
+      ;((and (pair? expression) (eq? (car expression) 'closure)) "hit test point")
       ;check for numerical calculation
       ((member? (operator expression) '(+ - * / %)) (Mvalue expression state))
+      ;function calls
+      ((eq? (operator expression 'funcall)) (Mfuncall (cdr expression)))
       ;check for boolean calculation
       ((member? (operator expression) '(|| && ! == != > < <= >=)) (Mboolean expression state))
       ;if it is not boolean or numerical, we can't solve it for now
       (else (error 'expression_not_supported)))))
+
+;-------------Function calls (experimental)----------------------
+(define get_func_name cadr)
+(define get_actual_par cddr)
+;Mfuncall takes a function call in form of (gcd x y).
+;Input: a name and parameters
+;Output: the result of function execution
+(define Mfuncall
+  (lambda (call state)
+    ((lambda (closure)
+       ;run the function in a special environment, returns a value or returns no value;
+      (run (look_up_closure_body closure) 
+           ;create the function runtime environment
+           (call-by-value_initialize_environment
+                 ;find formal parameters list
+                 (look_up_formal_parameters closure)
+                 ;extract actual parameters from the call
+                 (get_actual_par call)
+                 ;create the raw function call environment from current state
+                 ((look_up_state_creation_function closure) state)
+                 ;the current state that actual parameters live in
+                 state)
+           ;3 standard return function
+           stdreturn stdreturn stdreturn))
+           ;returns the closure of a function
+           (lookup (cons 'function (cons (get_func_name call) '())) state))))
+
+;create parameter binding in a call-by-value manner
+(define call-by-value_initialize_environment
+  ;takes 4 inputs, formal parameter list, actual param list, function runtime environment to be returned
+  ;and outer environment actual parameters live in
+  ;outputs the new function runtime environment with parameter binding created
+  (lambda (formal actual func_environment outer_environment)
+    (cond
+      ;if both of them becomes null, we funished all binding
+      ((and (null? formal) (null? actual)) func_environment)
+      ;if one of them but not both becomes null, there is an arity mismatch
+      ((or (null? formal) (null? actual)) (error 'arity-mismatch))
+      ;else, we are going on
+      (else (call-by-value_initialize_environment 
+             ;add_to_top_layer, bind the first of formal to its actual par value
+             
+             ;continue to process the remaining of the remainings
+             (cdr formal)
+             (cdr actual)
+             ;create binding of name  <= first item in remaining formal parameter.
+             ;                  value <= first item in remaining actual parameters, evaluated.
+             ;   added to environment <= the function call runtime environment
+             ;returns a modiefied environment
+             (add_with_assignment (first_item formal) (Mexpression (first_item actual) outer_environment) func_environment)
+             outer_environment)))))
 
 ;retrieve the numerical value of an expression
 (define Mvalue
@@ -391,7 +456,53 @@
 (define secondlist cadr)
 (define v_init? caddr)
 
+
+;Advanced Layering Tools
+;------------------------
+
+(define count
+  (lambda (l)
+    (cond
+      ((null? l) 0)
+      (else (+ 1 (count (cdr l)))))))
+;count_layers: 
+;IN: a state
+;OUT: a number indicating layers on top of base layer.
+;State= Base layer/Global => 0
+;State is inside main method: =>1
+
+(define count_layers
+  (lambda (state)
+    (- (count state) 2)))
+
+;Remove_d_layers:
+;IN: a number D, and a state
+;OUT: A state with the top most D layers removed.
+(define remove_d_layers
+  (lambda (d state)
+    (cond
+      ((zero? d) state)
+      (else (remove_d_layers (- d 1) (blow_top_layer state))))))
+
+;Keep_n_layers
+;IN: a number n and a state
+;OUT: A state with the bottom most n layers only.
+;Implementation: 
+;Check for the layers of the input state, m
+;Calculate d=m-n
+;Remove d layers, remaining r=m-d=n layers
+;Output the state with d layers removed
+
+(define keep_n_layers
+  (lambda (n state)
+    ((lambda (m)
+       (cond
+         ((> n m) (error 'not_enough_layers_to_keep))
+         (else (remove_d_layers (- m n) state)))) (count_layers state))))
+
+
 ;------ Layer helpers: manipulations of the layers -----
+
 ;IN: a state
 ;OUT: #t if a state has blocks inside
 (define hasblock?
@@ -451,16 +562,25 @@
       (else (return replacement)))))
 
 
-
-
 ;find an item x from key(list), and return the corresponding item in the target(list)
 (define find
   (lambda (x key target)
     (cond
       ((null? key) '(notfound))
       ((null? target) (error 'targetistooshort))
+      ;if x is a list, then use listeq to evaluate
+      ((and (and (list? (car key)) (list? x)) (listeq? x (car key))) (car target))
       ((eq? x (car key)) (car target))
       (else (find x (cdr key) (cdr target))))))
+
+;takes two lists of atoms
+(define listeq?
+  (lambda (l1 l2)
+    (cond
+      ((and (null? l1) (null? l2)) #t)
+      ((or (null? l1) (null? l2)) #f)
+      ((eq? (car l1) (car l2)) (listeq? (cdr l1) (cdr l2)))
+      (else #f))))
 
 ;create a state with 3 properties, empty
 (define newenvironment '(()()))
@@ -482,6 +602,7 @@
     (cond
       ((null? l) #f)
       ((eq? a (car l)) #t)
+      ((and (and (list? (car l)) (list? a)) (listeq? a (car l))) #t)
       (else (member? a (cdr l))))))
 
 ;testing tools
@@ -510,3 +631,4 @@
 
 ;(define autotest
  ; (testbatch fullset fullsetanswers))
+
