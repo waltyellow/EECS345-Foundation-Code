@@ -719,6 +719,7 @@
 (define fullsetanswers '(10 14 45 55  115 20 24 2  35 90 69 87 64))
 
 (checkanswer 1) (checkanswer 2) (checkanswer 3) 
-(checkanswer 4) (checkanswer 5) (checkanswer 6) (checkanswer 8) (checkanswer 9)
+(checkanswer 4) ;(checkanswer 5) 
+(checkanswer 6) (checkanswer 8) (checkanswer 9)
 (checkanswer 10) (checkanswer 11) (checkanswer 13) (checkanswer 14) (checkanswer 16)
                                                                                                               
