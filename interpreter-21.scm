@@ -1,42 +1,28 @@
-;zxh108
-;Zhenglin Huang
-;optimized version, Part 2
+;Kevin Wang (kxw233), Interpreter III, 4/10/2015
+;Collaborated and Part II provided by Walter (Zhenglin) Huang (zxh108).
 
 (load "functionParser.scm")
-;takes a file and run the call tree generated from it
-;(define interpret
-  ;(lambda (file)
-    ;(call-main (create_closure (parser file) (create-outer-layer (parser file) newenvironment stdreturn) stdreturn))))
-    ;(run (parser file) newenvironment stdreturn stdreturn stdreturn)))
 
+
+;interpret takes a file and executes it by calling the main method on the environment after all function declarations.
+;INPUT: file name
+;OUTPUT:result of calling the main method
 (define interpret
   (lambda (file)
      (call-main (run (parser file) newenvironment stdreturn stdreturn stdreturn))))
 
 ;--------------------
+;call-main 
 (define call-main
   (lambda (state)
  (M_return '(return (funcall main)) state)))
 
-(define decl_type car)
 
-(define create_outer_layer 
-  (lambda (queue state return)
-    (cond
-      ((null? queue) (return state))
-      ((eq? 'var (decl_type queue)) (create_outer_layer (cdr queue) (Mstate_declaration (car queue) state return) return))
-      ((eq? 'function (decl_type queue)) (create_outer_layer (cdr queue)  return))
-      (else (error 'not-a-var-or-func)))))
-           
-    
           
 ;--------------------
 
-;returns a state that is modified by the call tree
-;Input: queue is the list of statement, state is the state to operate on, 
-;return is the function that takes our output state, when return is called 
-;break is the function that takes output state when break is called
-;continue is the function that takes output state when break is called
+;INPUT: a list of statements, a current state, a function to output when return, break, and continue are called
+;OUTPUT: a state after execution of a statement.
 (define run
   (lambda (queue state return break continue)
     ;if the tree is empty
@@ -54,38 +40,43 @@
 (define stdreturn
   (lambda (v) v))
 
-;building block of "run"
-;input: takes a single-statement and execute it. Along with state and the 3 return functions
-;ex. takes (begin (...) (...) (...))
-;ex. takes (= x 5)
-;output: modified state in a cps manner
+
+;Mstate-cps takes a single-statement and execute it, and produces a modified state after the execution of a statement.
+;INPUT: a single statement, a current state, and functions to deal with return, break, continue.
+;OUTPUT: a modified state after statement's execution
+
 (define Mstate-cps
   (lambda (statement state return break continue)
     (cond
-      ;if the statement is empty, do nothing
+      ;if the statement is empty, return the current state
       ((null? statement) (return state))
-      ;if the first word is var, it is an declaration
+      ;if the first part of the statement is var, then go to the respective Mstate function for variable declaration
       ((eq? 'var (operator statement)) (Mstate_declaration-cps statement state return))
-      ;if the first word is "=", it is an assignment
+     ;if the first part of the statement is =, then go to the respective Mstate function for assignment
       ((eq? '= (operator statement)) (Mstate_assignment-cps statement state return))
-      ;if it starts with "return", we retrive the boolean or numerical value of the next item, the expression
+      ;if the first part of the statement is return, then go to the respective function to find the return value
       ((eq? 'return (operator statement)) (break (M_return statement state)))
-      ;if it is an if statement
+      ;if the first part of the statement is if, then go to the respective Mstate function to execute an if statement
       ((eq? 'if (operator statement)) (Mstate_if-cps statement state return break continue))
-      ;if it is a while loop
+      ;if the first part of the statement is while, then go to the respective Mstate function for a while loop
       ((eq? 'while (operator statement)) (M_while statement state return))
-      ;if we see a begin, then (cdr statement) (inside a block) is a tree
+      ;;if the first part of the statement is begin, then the statement is a new "layer"
       ((eq? 'begin (operator statement)) (M_block_begin statement state return break continue))
+      ; If the first part of the statement is continue, executes a continue (breaks then returns to loop condition)
       ((eq? 'continue (operator statement)) (continue state))
+      ;If the first part of the statemetn is break, executes a break (exits the layer/loop).
       ((eq? 'break (operator statement))  (break state))
+      ;If the first part of the statement is a function declaration, add a closure of that function to the state.
       ((eq? 'function (operator statement)) (return (add_function_closure statement state)))
-      ;Added function call without return
+      ;If the first part of the statement is a function call, execute that function call.
       ((eq? 'funcall (operator statement)) (begin (Mfuncall statement state) (return state)))
+      ;Otherwise, it is not a valid command.
       (else (error 'statement_not_recognized)))))
 
-;takes a block-begin-end statement and run it with "run" function
-;for the 3 return functions, exit_block is built-in. Meaning that the block will blow off top layer state automatically.
-;returns the state in cps style
+;Takes a statement with the word begin and creates a new layer, then executes that block of code.
+;INPUT: A statement, state, and functions for return, break, and continue.
+;OUTPUT: A new state with a new "layer" in which variables are only visible to that layer.
+
 (define M_block_begin
   (lambda (statement state return break continue)
     (run 
@@ -96,43 +87,52 @@
      (lambda (snapshot) (exit_block snapshot continue))
      )))
 
-;takes a while statement, and execute it
-;this is the layer to create a breakpoint
+;Executes the change in state for a while loop
+;INPUT:A statement corresponding to a while loop, state, and return function
+;OUTPUT: The statement after the execution of a while loop.
 (define M_while
   (lambda (statement state return)
          (M_while_loop statement state return return)))
 
-;building block for while
-;takes a while loop, evaluate the condition and decide whether to continue the loop
+;A helper function to deal with the recursive call of a while loop to continue until condition becomes false.
+;INPUT: statement corresponding to a while loop statement
+;OUTPUT: state at the end of the a loop iteration.
+
 (define M_while_loop
   (lambda (statement state return break)
-    ;if the condition is true
+    ;if the condition  of the loop is true
     (if (Mboolean (condstmt statement) state)
         (Mstate-cps 
-         ;execute the body
+         ;execute the body of the loop
          (thenstmt statement)
-         ;with current state
+         ;with the current state
          state 
-         ;how we deal with executed return state => run the loop again
+         ;recursive call, run the loop again as the loop condition is true here
          (lambda (result_state) (M_while_loop statement result_state return break )) 
-         ;preserve breakpoint
+         ;handle break statements
          break 
-         ;stated passed in by continue => run the loop again
+         ;if continue called, break the loop and return to the loop condition, and if that evaluates true, run the loop again
          (lambda (continue_state) (M_while_loop statement continue_state return break)))
-        ;else the condition is not true, return the current state as break
+        ;else the condition is not false so continue is equivalent to break
         (break state))))
 
-;a filter layer to create proper return value
+;Converts a boolean return value to a literal one.
+;INPUT: A statement and a given state
+;OUTPUT: Either true or false literals if return value is a boolean value
 (define M_return
   (lambda (statement state)
     ((lambda (print)
        (cond
+         ;if true, print the literal true
          ((eq? print #t) 'true)
+         ;if false, print the literal false
          ((eq? print #f) 'false)
          (else print)))
      (Mexpression (secondterm statement) state))))
 
-;takes an if statement and a state, and generates a new state in a cps manner
+;Takes an if statement and returns the state after the execution of that if statement.
+;INPUT: An if statement and state, return, break, continue functions.
+;OUTPUT: A new state after the execution of the if statement.
 (define Mstate_if-cps
   (lambda (statement state return break continue)
     ; if it is true
@@ -145,11 +145,14 @@
             ;if else does exist as below-
             (Mstate-cps (elsestmt statement) state return break continue)))))
 
+;Abstraction for defining the parts of an if statement 
 (define condstmt cadr)
 (define thenstmt caddr)
 (define elsestmt cadddr)
 
-;takes an declaration and returns a modified state, in a cps manner
+;Takes an declaration statement and returns the state after the new declaration.
+;INPUT: A declaration statement, state, and return functions.
+;OUTPUT: A new state after the execution of the declaration, the declared variable is now put into the state.
 (define Mstate_declaration-cps
   (lambda (statement state return)
     ;if it is a (var x) style
@@ -159,123 +162,119 @@
         ;adds a new one with declared value. Removed the same variable previously first
         (return (add_with_assignment (lhs statement) (Mexpression (rhs statement) state) (remove_from_top_layer (lhs statement) state))))))
 
-;-----------------Assignment-------------
-;takes an assignment statement
+;Takes an assignment statement and returns the state after the assignment statement.
+;INPUT: A assignment statement, state.
+;OUTPUT: A new state after the execution of the assignment statement.
 (define Mstate_assignment
   (lambda (stmt state)
     (Mstate_assignment-cps stmt state stdreturn)))
 
-;cps
+
+;Takes an assignment statement and returns the state after the assignment statement. A cps version of the assignment statement.
+;INPUT: A assignment statement, state.
+;OUTPUT: A new state after the execution of the assignment statement.
+
 (define Mstate_assignment-cps
   (lambda (statement state return)
     ;if the variable is declared
     (return (update_var (lhs statement) (Mexpression (rhs statement) state) state))))
 
+;Abstraction for the lefthand and righthand side of the assignment statement
 (define lhs cadr)
 (define rhs caddr)
 
 
-;-------------EVALUATION OF MVALUE---------------------
-;
-;
-;//////Mexpression, Mvalue and Mboolean
-;
-;
-;-------------FUNCTION EXECUTION HAPPEN HERE-----------
-;takes an expression, and returns its value either in boolean or integer
-;functions:
-;1. understand true and false atonds
-;2. lookup proper boxes
-;3. send task to either Mvalue and Mboolean
 
+;Mexpression takes an expression, or an statement with a return value, and returns the corresponding function to calculate the value.
+;INPUT: An expression and a state.
+;OUTPUT: A function.
 (define Mexpression
   (lambda (expression state)
     (cond
+      ;handle boolean or number values
       ((boolean? expression) (Mboolean expression state))
       ((number? expression) (Mvalue expression state))
+      ;handle boolean values that are literals.s
       ((eq? expression 'true) (Mboolean #t state))
       ((eq? expression 'false) (Mboolean #f state))
+      ;handle variable values
       ((atom? expression) (Mexpression (lookup expression state) state))
       ((and (pair? expression) (eq? (car expression) 'function)) (lookup expression state))
-      ;((and (pair? expression) (eq? (car expression) 'closure)) "hit test point")
-      ;check for numerical calculation
+      ;handle numeric calculations
       ((member? (operator expression) '(+ - * / %)) (Mvalue expression state))
-      ;function calls
+      ;handle function calls
       ((eq? (operator expression) 'funcall) (Mfuncall expression state))
-      ;check for boolean calculation
+      ;check for boolean operators
       ((member? (operator expression) '(|| && ! == != > < <= >=)) (Mboolean expression state))
-      ;if it is not boolean or numerical, we can't solve it for now
+      ;Operator is not supported by the current code values.
       (else (error 'expression_not_supported)))))
 
 
-;closure(experimental)
+;-------------FUNCTION CLOSURES--------------
+
+;Looks up a the function closure for a given function name in the state.
+;INPUT: A function name and a state.
+;OUTPUT: The respective closure of the function for the function name.
 (define look_up_function_closure 
   (lambda (name state)
+    ;creates a binding pair (function, name) to search for the function in the state.
     (lookup_value (cons 'function (cons name '()) state))))
 
-;(define closure_state_func (lambda (v) (keep_n_layers (count_layers state) v)))
 
-
-
-;(name, parameter list, function body, the function to return to the state which it was declared)
-
+; These abstractions are used to create the closure, they represent the respective parts of the function declaration statement.
 (define func_name cadr)
 (define parameter_list caddr)
 (define func_body cadddr)
 
-;(define create_closures
- ; (lambda (funcdecl_list state)
-  ;(cond
-   ; ((null? funcdecl_list) state)
-    ;(else cons (create_closure (car funcdecl_list) state) (create_closures (cdr funcdecl_list) state)))))
-    
-   
+
+;Creates a closure, or the minimum things a function needs for declaration as a tuple of a (function name, parameter lists, function body, and a function to access the state at which it was stored)
+;INPUT: A function declaration statement and a state.
+;OUTPUT: The respective closure of the function, which can be put into the state.
 (define create_closure
   (lambda (funcdecl state)
   ; (cons (func_name funcdecl) (cons (parameter_list funcdecl) (cons (func_body funcdecl) (cons (lambda (v) (keep_n_layers (count_layers state) v))'()))))))
   (append (cdr funcdecl) (cons (lambda (v) (keep_n_layers (count_layers state) v))'()))))
 
-
+;These abstractions are used in the closure to extract parts of the closure for use
 (define closure_func_name car)
 (define closure_parameter_list cadr)
 (define closure_body caddr)
 (define closure_state_creation_function cadddr)
 
+
+;Extracts the body of a function from its closure.
+;INPUT: A function closure.
+;OUTPUT: The respective body statement of that function closure.
 (define look_up_closure_body 
   (lambda (closure)
     (closure_body closure)))
 
+
+;Extracts the formal parameters of a function from its closure.
+;INPUT: A function closure.
+;OUTPUT: The respective formal parameters of that function closure.
 (define look_up_formal_parameters
   (lambda (closure)
     (closure_parameter_list closure)))
 
+
+;Extracts the function determining the state of the function when it was declared.
+;INPUT: A function closure.
+;OUTPUT: The respective function determining the state.
 (define look_up_state_creation_function
   (lambda (closure) 
     (closure_state_creation_function closure)))
 
 
-    
-(define look_up_closure_body2
-  (lambda (closure)
-    (cadr closure)))
 
-(define look_up_function_closure2
-  (lambda (function state)
-    (cond
-      ((empty? (car state)) error 'function_not_in_state)
-      ((member? function (caar state)) (unbox (caadr state)))
-      (else (look_up_function_closure2 function (remove_first state))))))
-
-
-
-;(define add_function_closure
- ; (lambda (function state)
-  ;  (add_to_top_layer (list 'function (cadr function)) (box (append (cddr function) (cons (lambda (v) (keep_n_layers (count_layers state) v)) '()))) state)))
-
+;Adds the function closure created into the state.
+;INPUT: A function declaration, a state.
+;OUTPUT: The state with the function closure added to it.
 (define add_function_closure
   (lambda (functiondecl state)
     (add_with_assignment (cons 'function (cons (funcname functiondecl) '())) (create_closure functiondecl state) state)))
 
+;Abstraction to determine the name of the function.
 (define funcname cadr)
 
    
@@ -283,12 +282,12 @@
     
 
 
-;-------------Function calls (experimental)----------------------
+;-------------FUNCTION CALLS----------------------
 (define get_func_name cadr)
 (define get_actual_par cddr)
-;Mfuncall takes a function call in form of (gcd x y).
-;Input: a name and parameters
-;Output: the result of function execution
+;Mfuncall takes a function call and produces its output.
+;INPUT: A name and the parameters, as well as the current state
+;OUTPUT: The result of function execution
 (define Mfuncall
   (lambda (call state)
     ((lambda (closure)
@@ -334,7 +333,9 @@
              (add_with_assignment (first_item formal) (Mexpression (first_item actual) outer_environment) func_environment)
              outer_environment)))))
 
-;retrieve the numerical value of an expression
+;Takes an expression and calculates the value of that expression
+;INPUT: An expression
+;OUTPUT: A return value of the expression.
 (define Mvalue
   (lambda (expression state)
     (cond
@@ -358,7 +359,9 @@
                                                  (Mvalue (rightoperand expression) state)))
       (else (error 'bad_operator)))))
 
-;retrieves a boolean number by executing the expression
+;Returns the boolean value of an boolean expression
+;INPUT: An boolean expression, a state
+;OUTPUT: A boolean value
 (define Mboolean
   (lambda (expression state)
     (cond
@@ -385,7 +388,7 @@
 
 ;------------------Helpers--------------------------
 
-;abstractions for getting the three things right
+;Abstractions for expressions
 (define operator car)
 (define leftoperand cadr)
 (define rightoperand caddr)
@@ -393,18 +396,6 @@
 (define secondterm cadr)
 (define thirdterm caddr)
 (define atom? (lambda (v) (not (pair? v))))
-
-
-
-
-
-
-
-
-
-;--------------------See below for environmental manipulations---------------------------
-
-
 
 
 
@@ -424,31 +415,36 @@
 ;	Update: Lookup with a value intended. Once found, swap the box content
 
 ;------ Add ----------------------------
-;method to add a new variable and assign its value, show that it is initialized
+;Add_with_assignment creates a binding of a name to a value, and stores it into the state
+;INPUT: A name, a corresponding value, and a state
+;OUTPUT: The state after the assignment was completed
 (define add_with_assignment
   (lambda (name value state)
     (add_to_top_layer name (box value) state)))
 
 (define addvalue add_with_assignment)
 
-;method to only declare a variable, show that it is initialized
+
+;Add_with_assignment creates a binding of a name to a value, and stores it into the state
+;INPUT: A name and a state
+;OUTPUT: The state after the assignment was completed
 (define add_declare_only
   (lambda (name state)
     (add_to_top_layer name (box '(null)) state)))
 
 (define addvar add_declare_only)
 
-;takes a layered state, and add the binding to the top layer
-;Input: x1=name to be added x2=value too be added state
-;Output: a state with such binding added to its top layer
+
+;Adds to the top layer of a layer, or the outermost layer. Creates a binding of a name to a value, and stores it into the state
+;INPUT: A name, a corresponding value, and a state
+;OUTPUT: The state after the assignment was completed
 (define add_to_top_layer
   (lambda (name value state)
     (switch_top_layer (add_without_block name value (fetch_top_layer state)) state)))
 
-;takes a state without block, and add the binding to the state
-;Input: x1=name to be added x2=value too be added, state to be modified
-;Output: a state with such binding added
-
+;Adds to a state without blocks. Creates a binding of a name to a value, and stores it into the state
+;INPUT: A name, a corresponding value, and a state
+;OUTPUT: The state after the assignment was completed
 (define add_without_block
   (lambda (name value state)
     (combine (cons name (firstlist state)) (cons value (secondlist state)))))
@@ -460,20 +456,25 @@
 ;-------Remove ---------
 ;method to remove a variable from the an environment, and all attributes associated with it.
 
-;remove a binding with name from top layer
-;Input: a name for target removal, a state 
-;Output: the targeted variable is removed from the top layer, if any
+;Removes to the top layer of a layer, or the outermost layer. Takes a name and deletes it form the state
+;INPUT: A name, and a state
+;OUTPUT: The state after the deletion was completed.
 (define remove_from_top_layer
   (lambda (name state)
     (switch_top_layer (remove_without_block name (fetch_top_layer state)) state)))
 
+
+;Removes from a state with no blocks or layers. Deletes the name and value from the state.
+;INPUT: A name, and a state
+;OUTPUT: The state after the deletion was completed.
 (define remove_without_block
   (lambda (n s)
     (remove_without_block-cps n s stdreturn)))
 
-;Input: a name, a state without blocks, and a return function
-;Output: the state with binding corresponding to the name removed, if any
-;---CPS-----
+;Removes from a state with no blocks or layers. Deletes the name and value from the state. Same as above but with cps.
+;INPUT: A name, and a state
+;OUTPUT: The state after the deletion was completed.
+
 (define remove_without_block-cps
   (lambda (name state return)
     (cond
@@ -495,6 +496,11 @@
 ; the value to look up for is not assigned -> error
 ; if the return box look up returned a #f instead of a box
 ; the value to loop up for is not declared -> error
+
+;Looks up the value of the name in the state. If the return is ('null), it means that the variable was not assigned any value, which is an error. 
+;If the return is #f, it means that the variable was not declared, which is an error.
+;INPUT: A name, and a state
+;OUTPUT: The value retrived from the name.
 ;---CPS cited-----
 (define lookup_value
   (lambda (name state)
@@ -510,8 +516,10 @@
      (lookup_box_general name state))))
 
 (define lookup lookup_value)
-;takes a name to look up for, and the state to loop up from
-;returns the corresponding box from the inner most layer it was found
+
+;Same as lookup but retrives the first instance of the name.
+;INPUT: A name, and a state
+;OUTPUT: The value retrived from the name.
 (define lookup_box_general
   (lambda (name2 state2)
     (call/cc
@@ -538,8 +546,8 @@
            (begin (set-box! box value) state)))
      (lookup_box_general name state))))
 
-;note: init? does not exist anymore
-;the way to retrieve name, value and init? from the environment
+;Abstractions
+
 (define v_name car)
 (define var_name car)
 (define firstlist car)
@@ -559,19 +567,19 @@
     (cond
       ((null? l) 0)
       (else (+ 1 (count (cdr l)))))))
-;count_layers: 
-;IN: a state
-;OUT: a number indicating layers on top of base layer.
-;State= Base layer/Global => 0
-;State is inside main method: =>1
 
+
+;Counts the number of layers in a state, zero indexed (base layer is layer 0).
+;INPUT: A state.
+;OUTPUT: The number of layers in the state.
 (define count_layers
   (lambda (state)
     (- (count state) 2)))
 
-;Remove_d_layers:
-;IN: a number D, and a state
-;OUT: A state with the top most D layers removed.
+
+;A function to remove the topmost d layers.
+;INPUT: A state, and a number d to remove.
+;OUTPUT: A state with the top most D layers removed.
 (define remove_d_layers
   (lambda (d state)
     (cond
@@ -579,14 +587,17 @@
       (else (remove_d_layers (- d 1) (blow_top_layer state))))))
 
 ;Keep_n_layers
-;IN: a number n and a state
-;OUT: A state with the bottom most n layers only.
+;INPUT: a number n and a state
+;OUTPUT: A state with the bottom most n layers only.
 ;Implementation: 
 ;Check for the layers of the input state, m
 ;Calculate d=m-n
 ;Remove d layers, remaining r=m-d=n layers
 ;Output the state with d layers removed
 
+;A function to remove the bottom most n layers.
+;INPUT: A state, and a number n of layers to keep.
+;OUTPUT: A state with the bottom most n layers.
 (define keep_n_layers
   (lambda (n state)
     ((lambda (m)
@@ -595,36 +606,38 @@
          (else (remove_d_layers (- m n) state)))) (count_layers state))))
 
 
-;------ Layer helpers: manipulations of the layers -----
 
-;IN: a state
-;OUT: #t if a state has blocks inside
+;Function to determine whether there are blocks inside a state.
+;INPUT: a state
+;OUTPUT: #t if a state has blocks inside
 (define hasblock?
   (lambda (state)
     (not (null? (deletefirsttwo state)))))
 
-;IP2 helper
+;Abstraction helpers
 (define deletefirstthree cdddr)
 (define deletefirsttwo cddr)
 (define get_top_layer car)
 (define except_top_layer cdr)
 
-;in: a state
-;out: the input state with top layer removed
+;Function to remove the top layer of a state.
+;INPUT: A state.
+;Output: A state with the top layer removed.
 (define blow_top_layer
   (lambda (state)
     (blow_top_layer-cps state stdreturn)))
 
-;enter block is one-operation non-cps
-;in: a state
-;out: the state with a new top layer added
+
+;Adds a new top layer to a state.
+;INPUT: A state.
+;OUTPUT: the state with a new top layer added.
 (define enter_block
   (lambda (state)
     (cons newenvironment state)))
 
-;in: a state, a return location
-;out: the input state with top layer removed, feeded to the return function
-;---CPS-----
+;Function to remove the top layer of a state, cps style.
+;INPUT: A state.
+;Output: A state with the top layer removed.
 (define blow_top_layer-cps
   (lambda (state return)
     (cond
@@ -634,8 +647,10 @@
 (define exit_block
   blow_top_layer-cps)
 
-;in: a state
-;out: the top layer of the state, if none, then the state itself
+
+;Function to remove the top layer of a state.
+;INPUT: A state.
+;Output: The top layer of the state, if none, the state itself.
 (define fetch_top_layer
   (lambda (state)
     (cond
@@ -645,10 +660,15 @@
 ;in: a replacement layer, and a state
 ;out: the state with top layer replaced by the replacement layer
 ;---CPS-----
+
+;Function to replace the top layer of the state.
+;INPUT: A state.
+;Output: A new state with the top layer of the state switched with a replacement layer.
 (define switch_top_layer
   (lambda (replacement state)
     (switch_top_layer-cps replacement state stdreturn)))
 
+;cps version of above
 (define switch_top_layer-cps
   (lambda (replacement state return)
     (cond
@@ -656,7 +676,9 @@
       (else (return replacement)))))
 
 
-;find an item x from key(list), and return the corresponding item in the target(list)
+;Function to find a target, or value, from a key.
+;INPUT: A particular key, a list of a keys, a list of values.
+;OUTPUT: The value corresponding to the particular key.
 (define find
   (lambda (x key target)
     (cond
@@ -667,7 +689,9 @@
       ((eq? x (car key)) (car target))
       (else (find x (cdr key) (cdr target))))))
 
-;takes two lists of atoms
+;Determines whether two lists are identical.
+;INPUT: Two lists.
+;OUTPUT: A boolean to whether the lists are equal with each other.
 (define listeq?
   (lambda (l1 l2)
     (cond
@@ -676,22 +700,25 @@
       ((eq? (car l1) (car l2)) (listeq? (cdr l1) (cdr l2)))
       (else #f))))
 
-;create a state with 3 properties, empty
+;New environment state
 (define newenvironment '(()()))
 
-;takes two sublists
-;returns a state consists of 2 lists
+;Attaches two lists together.
+;INPUT: Two lists.
+;OUTPUT: Two lists combined together.
 (define combine
   (lambda (l1 l2)
     (cons l1 (cons l2 '()))))
 
 
-;pass in a state with the first variable removed
 (define remove_first
   (lambda (s)
     (combine (cdr (v_name s)) (cdr (v_value s)))))
 
-;takes an atom and a list, to check whether the atom is in the list
+
+;Function to see if an atom is in a list.
+;INPUT: A list.
+;OUTPUT: True or false, if the atom is in the list or not.
 (define member?
   (lambda (a l)
     (cond
@@ -718,8 +745,8 @@
 (define fullset        '( 1  2  3  4  6   8  9 10 11 13 14 15 16))
 (define fullsetanswers '(10 14 45 55  115 20 24 2  35 90 69 87 64))
 
-(checkanswer 1) (checkanswer 2) (checkanswer 3) 
-(checkanswer 4) ;(checkanswer 5) 
-(checkanswer 6) (checkanswer 8) (checkanswer 9)
-(checkanswer 10) (checkanswer 11) (checkanswer 13) (checkanswer 14) (checkanswer 16)
+;(checkanswer 1) (checkanswer 2) (checkanswer 3) 
+;(checkanswer 4) ;(checkanswer 5) 
+;(checkanswer 6) (checkanswer 8) (checkanswer 9)
+;(checkanswer 10) (checkanswer 11) (checkanswer 13) (checkanswer 14) (checkanswer 16)
                                                                                                               
